@@ -38,7 +38,7 @@ ATD Muhasebe, küçük ve orta ölçekli işletmeler için tasarlanmış, kullan
 
 1.  Bu depoyu klonlayın:
     ```bash
-    git clone https://github.com/kullanici_adinız/atd-muhasebe.git
+    git clone https://github.com/AYEDEV0/ATDonmuhasebe.git
     cd atd-muhasebe
     ```
 2.  Gerekli kütüphaneleri yükleyin:
