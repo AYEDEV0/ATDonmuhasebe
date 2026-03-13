@@ -70,4 +70,4 @@ build.bat
 Bu proje **MIT Lisansı** ile lisanslanmıştır. Daha fazla bilgi için `LICENSE` dosyasına bakabilirsiniz.
 
 ---
-*Geliştiren: [Sizin Adınız / Şirket Adınız]*
+*Geliştiren: AYE
