@@ -1,0 +1,268 @@
+# ATD Muhasebe — Uygulama Mimarisi ve Geliştirici Rehberi
+
+## 📁 Proje Yapısı
+
+```
+atd cari stok/
+├── main.py                  # Giriş noktası — QApplication başlatır
+├── build.bat                # PyInstaller build scripti
+├── ATD_Muhasebe.spec        # PyInstaller konfigürasyonu
+├── requirements.txt         # Python bağımlılıkları
+├── assets/
+│   └── logo.png             # Uygulama ikonu
+├── data/                    # Tüm veriler burada JSON olarak saklanır
+│   ├── inventory.json       # Ürün / stok verileri
+│   ├── contacts.json        # Cari kartlar
+│   ├── ledger.json          # Cari hareketler (muhasebe defteri)
+│   └── invoices.json        # Fatura ve fişler
+└── src/
+    ├── core/
+    │   ├── database.py      # Tek veritabanı singleton'ı (db)
+    │   └── models.py        # Veri modelleri (dataclass)
+    ├── ui/
+    │   ├── main_window.py   # Ana pencere ve tab yöneticisi
+    │   ├── stock_view.py    # 📦 Stok sekmesi
+    │   ├── contact_view.py  # 👥 Cari Kartlar sekmesi
+    │   ├── invoice_view.py  # 📄 Fatura / Fiş sekmesi
+    │   ├── sales_query_view.py   # 🔍 Cari/Satış Sorgulama
+    │   ├── ledger_view.py        # 💰 Kasa ve Hareketler
+    │   └── contact_ledger_view.py # Cari seçilince hareketleri gösterir
+    └── utils/
+        ├── excel_helper.py  # Excel import/export
+        ├── pdf_helper.py    # PDF rapor üretimi
+        ├── print_helper.py  # Fatura yazdırma
+        └── backup_manager.py # Yedekleme
+```
+
+---
+
+## 🗄️ Veritabanı: [src/core/database.py](file:///c:/Users/Halil/Desktop/atd%20cari%20stok/src/core/database.py)
+
+Tüm veri okuma/yazma işlemleri bu modüldeki **`db` singleton**'ı üzerinden yapılır.
+
+```python
+from src.core.database import db
+```
+
+> [!IMPORTANT]
+> `db` her zaman modül seviyesinde import edilmelidir. Fonksiyon içinde `from src.core.database import db` yapmak, özellikle build edilmiş `.exe`'de yanlış dizin hesaplamasına yol açar.
+
+### Path Mantığı
+- **Geliştirme:** `ROOT_DIR` = [database.py](file:///c:/Users/Halil/Desktop/atd%20cari%20stok/src/core/database.py)'nin 3 üst klasörü (proje kökü)
+- **Build (.exe):** `ROOT_DIR` = `sys.executable` (exe) klasörü → `dist/ATD_Muhasebe/`
+- `data/` klasörü bu `ROOT_DIR`'ın altında oluşturulur.
+
+### Metodlar
+
+| Metot | Açıklama |
+|-------|----------|
+| `db.get_inventory()` | `inventory.json → products[]` listesini döner |
+| `db.save_inventory(list)` | Listeyi kaydeder |
+| `db.get_contacts()` | `contacts.json → contacts[]` |
+| `db.save_contacts(list)` | |
+| `db.get_ledger()` | `ledger.json → transactions[]` |
+| `db.save_ledger(list)` | |
+| `db.get_invoices()` | `invoices.json → invoices[]` |
+| `db.save_invoices(list)` | |
+
+Yazma işlemi güvenli yapılır: önce `.tmp` dosyasına yazılır, sonra `.bak` ile yedeklenir, ardından asıl dosyanın üzerine taşınır.
+
+---
+
+## 📐 Veri Modelleri: `src/core/models.py`
+
+Tüm modeller Python `@dataclass` ile tanımlıdır. Her modelde `.to_dict()` ve `.from_dict()` vardır.
+
+### `Product` — Ürün / Stok Kartı
+```
+id, code, name, barcode, unit, multiplier,
+kdv_rate, is_kdv_included, buy_price, sell_price,
+stock_quantity, critical_level
+```
+- `stock_quantity` faturalamada otomatik artıp azalır.
+- `critical_level` altına düşünce stok tablosunda kırmızı gösterilir.
+
+### `Contact` — Cari Kart
+```
+id, code, name, address, phone, email,
+tax_office, tax_number, contact_type, balance
+```
+- `balance` (+) = müşteri bize borçlu, (-) = biz borçluyuz.
+- `contact_type`: `"Müşteri"`, `"Tedarikçi"`, `"Diğer"`
+
+### `Transaction` — Cari Hareket (Defter)
+```
+id, contact_id, date, type, amount,
+description, document_no, payment_method
+```
+- `type`: `"Satış"`, `"Alış"`, `"Tahsilat"`, `"Ödeme"`, `"İade"`
+- `document_no`: Bağlı fatura numarası (duplicate önlemek için kullanılır)
+
+### `Invoice` — Fatura / Fiş
+```
+id, invoice_no, contact_id, date, type, items[],
+subtotal, total_kdv, grand_total, paid_amount, status
+```
+- `type`: `"Satış Faturası"`, `"Alış Faturası"`, `"İade Fişi"`, `"Sipariş Fişi"`
+- `items`: `InvoiceItem.to_dict()` listesi
+- `Sipariş Fişi` stok ve bakiyeyi etkilemez.
+
+### `InvoiceItem` — Fatura Kalemi
+```
+product_id, product_name, quantity, unit,
+unit_price, kdv_rate, total_price
+```
+- `unit_price` KDV **hariç** birim fiyattır.
+- `total_price` = `unit_price × quantity + KDV`
+
+---
+
+## 🔗 Modüller Arası Bağlantılar
+
+```mermaid
+graph TD
+    main["main.py"] --> MW["MainWindow"]
+    MW --> SV["StockView (📦)"]
+    MW --> CV["ContactView (👥)"]
+    MW --> IV["InvoiceView (📄)"]
+    MW --> SQV["SalesQueryView (🔍)"]
+    MW --> LV["LedgerView (💰)"]
+
+    IV -->|fatura kaydet| db[("db singleton")]
+    IV -->|stok azalt| db
+    IV -->|bakiye güncelle| db
+    IV -->|ledger yaz| db
+
+    SV -->|ExcelHelper| EH["excel_helper.py"]
+    CV -->|ExcelHelper| EH
+
+    SQV -->|PDF rapor| PH["pdf_helper.py"]
+    IV -->|Yazdır| PRH["print_helper.py"]
+
+    db --> INV["inventory.json"]
+    db --> CON["contacts.json"]
+    db --> LED["ledger.json"]
+    db --> INV2["invoices.json"]
+```
+
+---
+
+## ⚙️ Fatura Kaydetme Akışı (InvoiceView)
+
+Fatura kaydedildiğinde şu işlemler sırayla gerçekleşir:
+
+1. **`invoices.json`'a eklenir** → faturanın tamamı kaydedilir
+2. **Cari bakiye güncellenir** (`contacts.json`):
+   - Satış Faturası → `balance += grand_total`
+   - Alış Faturası → `balance -= grand_total`
+   - İade Fişi → `balance -= grand_total`
+3. **Ledger'a hareket eklenir** (`ledger.json`):
+   - Ana fatura için bir Transaction
+   - Eğer `paid_amount > 0` ise, ayrıca Tahsilat/Ödeme Transaction'ı
+4. **Stok güncellenir** (`inventory.json`):
+   - Satış Faturası → `stock_quantity -= miktar`
+   - Alış / İade → `stock_quantity += miktar`
+
+> [!NOTE]
+> Sipariş Fişi hiçbir şeyi etkilemez, sadece kayıt altına alınır.
+
+### Fatura Silme
+`delete_invoice_records()` tüm işlemleri tersine çevirir:
+- Bakiyeyi geri alır
+- Ledger'dan ilgili `document_no`'lu Transaction'ları siler
+- Stok miktarlarını eski haline döndürür
+- Sonra invoice listesinden siler
+
+---
+
+## 📊 Sekmeler ve Görevleri
+
+### 📦 StockView — Stok ve Ürünler
+- Ürün CRUD (Ekle, Düzenle, Sil)
+- Excel'e Aktar → `export_to_excel(data, headers, filename, keys=...)`
+- Excel'den Aktar → `import_products_from_excel()` (esnek sütun algılama)
+- Kritik stok seviyesi kırmızı renk uyarısı
+
+### 👥 ContactView — Cari Kartlar
+- Cari CRUD
+- Bakiye görüntüleme
+- Excel'den toplu cari import (`import_contacts_from_excel`)
+- Seçili carinin hareketlerini göster (ContactLedgerView açılır)
+
+### 📄 InvoiceView — Fatura / Fiş
+- Fatura Kes (yeni)
+- Fatura Düzenle (önce siler sonra yeniden kaydeder)
+- Fatura Sil (tüm etkilerini geri alır)
+- Yazdır / Görüntüle (print_helper)
+- Arama filtresi
+
+### 🔍 SalesQueryView — Cari/Satış Sorgulama
+- Tarih aralığı ve cari filtresi
+- Fatura + bağımsız tahsilat/ödeme satırlarını birleştirir
+- Seçili cari için devreden bakiye (önceki dönem) hesaplar
+- Fatura seçilince alt tabloda kalemleri gösterir
+- PDF Rapor ihracat
+
+### 💰 LedgerView — Kasa ve Hareketler
+- Tüm Transaction'ları listeler
+- Manuel Tahsilat / Ödeme girişi
+- Tarih filtresi
+
+---
+
+## 🛠️ Yardımcı Modüller
+
+### `excel_helper.py`
+
+**`export_to_excel(parent, data, headers, filename, keys=None)`**
+- `keys` verilirse sadece o JSON alanları alınır ve `headers` ile eşleştirilir
+- `keys` verilmezse `id` ve `contact_id` hariç tüm alanlar alınır
+
+**`import_products_from_excel(parent)`**
+- Esnek sütun algılama (Türkçe/İngilizce sütun adları)
+- `Stok Kodu` yoksa `STK-0001`, `STK-0002`... otomatik üretir
+- Sadece `Ürün Adı` (veya muadili) zorunlu
+
+**`import_contacts_from_excel(parent)`**
+- Çok sayfalı Excel destekler (her sayfayı kontrol eder)
+- Firma No, Firma Adı, Telefon, Vergi No vs. otomatik eşleştirilir
+
+### `pdf_helper.py`
+- `PdfHelper.export_sales_pdf(parent, data, start, end, filepath, opening_balance)` → Satış PDF raporu
+
+### `print_helper.py`
+- `PrintHelper.print_invoice(inv_dict, contact_name)` → Fatura/fiş yazdırma ekranı
+
+---
+
+## 📦 Build Alma
+
+```bat
+# build.bat çalıştır veya:
+pyinstaller --noconfirm ATD_Muhasebe.spec
+```
+
+Çıkış: `dist/ATD_Muhasebe/ATD_Muhasebe.exe`
+
+> [!IMPORTANT]
+> Build sonrasında `data/` klasörü **exe'nin yanında** bulunmalıdır. Uygulama ilk açılışta yoksa otomatik oluşturur.
+
+### `ATD_Muhasebe.spec` içeriği:
+- `datas` ile `assets/` ikona dahil edilir
+- Windowed mod (konsol penceresi yok)
+
+---
+
+## 🔒 Önemli Kurallar (Gelecek Geliştirmeler için)
+
+> [!WARNING]
+> **`db` modül seviyesinde import edin.** Fonksiyon içinde lazy import yapmayın — bu özellikle `.exe`'de yanlış path'e yazılmasına neden olur.
+
+> [!WARNING]
+> **Fatura silme `delete_invoice_records()` üzerinden yapılmalıdır.** Doğrudan `invoices.json`'dan silmek bakiye ve stoğu bozar.
+
+> [!NOTE]
+> **Bakiye mantığı:** `balance > 0` → müşteri bize borçlu. `balance < 0` → biz borçluyuz (tedarikçi). Ödeme alınca bakiye azalır, satış yapılınca artar.
+
+> [!TIP]
+> Yeni bir sekme eklemek için: `src/ui/` altına yeni view ekle → `main_window.py`'de `setup_tabs()` içinde `self.tabs.addTab()` ile kaydet.
